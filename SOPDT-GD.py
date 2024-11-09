@@ -6,12 +6,14 @@ Created on Thu Aug 10 13:59:32 2017
 Delta Motion, Inc.
 """
 import os
+import sys
 import time
 import copy
 import numpy as np
 import pandas as pd
 from scipy.integrate import odeint
 from scipy.interpolate import CubicSpline
+from quadinterp import quadinterp
 from tempplot import tempplot           # my script found in the PYTHONPATH
 
 
@@ -87,7 +89,8 @@ def difeq(y, t, p):
     if _t < 0:                          # don't assume CO befor t=0 is 0
         _u = aCO[0]
     else:
-        _u = float(control_interp(max(_t,0)))   # compensate for dead time
+        #_u = float(control_interp(max(_t,0)))   # compensate for dead time
+        _u = float(qinterp(max(_t,0)))   # compensate for dead time
     _dy2dt = (-(_t0+_t1)*y[1]-y[0]+_k*_u+_c)/(_t0*_t1)
     return np.array([y[1], _dy2dt])     # return PV' and PV''
 
@@ -141,7 +144,7 @@ def gradient_descent(f, p):
         gnorm = np.linalg.norm(grad)            # gradient norm
         step = -alpha*grad                      # the step is opposite
         p += step                               # update the parameters
-        p = np.fmax(np.fmin(p,b[:,1]),b[:,0]) 	# bounds check
+        p = np.fmax(np.fmin(p,b[:,1]),b[:,0])   # bounds check
         _mse = f(p)                             # cost function
         if _mse < mse:
             fxtol += 0.2*(np.linalg.norm(step/p)-fxtol) # beware of divide by 0!
@@ -160,14 +163,15 @@ def main():
         Don't forget to change the deliminator for the ReadCSV function
         The time units are those used in the input file"""
 
-    global aTime, aCO, aPV, control_interp, b   # These don't change after being initialized
-    path = os.path.join("..", "data", "Hotrod.txt")
+    global aTime, aCO, aPV, control_interp, qinterp, b   # These don't change after being initialized
+    path = sys.argv[1:] and sys.argv[1] or os.path.join("..", "data", "Hotrod.txt")
     df = pd.read_csv(path, sep='\t', header=0)
     aTime = df.to_numpy()[:,0]
     aCO = df.to_numpy()[:,1]                    # control output, 0-100%
     aPV = df.to_numpy()[:,2]                    # process values, temperatures
-    aTime /= 60.0		    	                # convert seconds to minutes
-    control_interp = CubicSpline(aTime, aCO, bc_type='natural')	# for dead time
+    aTime /= 60.0                               # convert seconds to minutes
+    control_interp = CubicSpline(aTime, aCO, bc_type='natural')  # for dead time
+    qinterp = quadinterp(aTime, aCO)
 
     p0, b = init_params()                       # initial parameters and bounds
     time0 = time.process_time()
