@@ -6,6 +6,7 @@ Created on Thu Aug 10 13:59:32 2017
 Delta Motion, Inc.
 """
 import os
+import sys
 import time
 import copy
 import numpy as np
@@ -17,6 +18,7 @@ from tempplot import tempplot           # my script found in the PYTHONPATH
 
 
 ftol = 0.2                              # search until mse < ftol, it takes a day
+ftol = 0.05                             # search until mse < ftol, it takes a day
 xtol = 1e-6                             # distance tolerence, earch until xftol < xtol
 alpha = 200e-6                          # learning rate
 h = 1e-5                                # finite difference step size
@@ -57,11 +59,13 @@ def calc_PID(p):
 def init_params():
     p0 = np.empty(len(p_enum))
 
-    p0[gain] = 4.0                      # plant gain deg/% control
-    p0[t0] = 0.5                        # time constant 0, min
-    p0[t1] = 3.0                        # time constant 1, min
-    p0[off] = 70.0                      # ambienmt temperature, deg F
-    p0[dead] = 1.0                      # dead time, min
+    aCOrange = aCO[-1]-aCO[0]           # % control
+    aPVrange = aPV[-1]-aPV[0]           # deg F
+    p0[gain] = aPVrange / aCOrange      # plant gain deg F/% control
+    p0[t0] = 0.73                       # time constant 0, min
+    p0[t1] = 2.83                       # time constant 1, min
+    p0[off] = aPV[-1]-(aCO[-1]*p0[gain])# ambient temperature, deg F
+    p0[dead] = 0.282                    # dead time, min
 
     # bounds
     b = np.array(
@@ -141,7 +145,7 @@ def gradient_descent(f, p):
         gnorm = np.linalg.norm(grad)            # gradient norm
         step = -alpha*grad                      # the step is opposite
         p += step                               # update the parameters
-        p = np.fmax(np.fmin(p,b[:,1]),b[:,0]) 	# bounds check
+        p = np.fmax(np.fmin(p,b[:,1]),b[:,0])   # bounds check
         _mse = f(p)                             # cost function
         if _mse < mse:
             fxtol += 0.2*(np.linalg.norm(step/p)-fxtol) # beware of divide by 0!
@@ -161,13 +165,21 @@ def main():
         The time units are those used in the input file"""
 
     global aTime, aCO, aPV, control_interp, b   # These don't change after being initialized
-    path = os.path.join("..", "data", "Hotrod.txt")
+    path = sys.argv[1:] and sys.argv[1] or os.path.join("..", "data", "Hotrod.txt")
     df = pd.read_csv(path, sep='\t', header=0)
     aTime = df.to_numpy()[:,0]
     aCO = df.to_numpy()[:,1]                    # control output, 0-100%
     aPV = df.to_numpy()[:,2]                    # process values, temperatures
-    aTime /= 60.0		    	                # convert seconds to minutes
-    control_interp = CubicSpline(aTime, aCO, bc_type='natural')	# for dead time
+    ksmooth = 0
+    for arg in sys.argv:
+      if arg.startswith('--smooth='):
+        ksmooth = int(arg[9:])
+        aPV = np.vstack([np.roll(aPV,-i) for i in range(ksmooth)]).mean(axis=0)[:-ksmooth]
+        aTime = aTime[:-ksmooth]
+        aCO = aCO[:-ksmooth]
+        break
+    aTime /= 60.0                               # convert seconds to minutes
+    control_interp = CubicSpline(aTime, aCO, bc_type='natural')  # for dead time
 
     p0, b = init_params()                       # initial parameters and bounds
     time0 = time.process_time()
@@ -179,6 +191,7 @@ def main():
     dp = del_f(t0p2, p_opt)                     # the gradient at the 'minimum'
     gnorm = np.linalg.norm(dp)                  # the gradient norm at the 'minimum'
     print(f'\nMSE = {mse:12.9f}  RMSE = {np.sqrt(mse):12.9f} gnorm = {gnorm:.3f}')
+    print(f'Moving average size = {ksmooth}')
 
     print_params(p_opt)
     _k = p_opt[gain]                            # open loop gain.  PV change / %control output
