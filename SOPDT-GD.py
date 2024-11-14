@@ -13,14 +13,16 @@ import numpy as np
 import pandas as pd
 from scipy.integrate import odeint
 from scipy.interpolate import CubicSpline
+from linearinterp import linearinterp
 from quadinterp import quadinterp
-from tempplot import tempplot           # my script found in the PYTHONPATH
+from cubicinterp import cubicinterp
+from tempplot import tempplot           # plotting script of results
 
 
 
 ftol = 0.2                              # search until mse < ftol, it takes a day
 ftol = 0.05                             # search until mse < ftol, it takes a day
-xtol = 1e-6                             # distance tolerence, earch until xftol < xtol
+xtol = 1e-6                             # distance tolerance, search until xftol < xtol
 alpha = 200e-6                          # learning rate
 h = 1e-5                                # finite difference step size
 
@@ -41,14 +43,14 @@ def print_params(p):
 
 def calc_PID(p):
     """ calculate the controller ISA PID parameters """
-    _k = p[gain]                        # open loop extend gain
-    _t0 = p[t0]
-    _t1 = p[t1]
-    _c = p[off]                         # output offset or bias
-    _dt = p[dead]
+    _k = p[gain]                        # open loop extend gain, degF/%
+    _t0 = p[t0]                         # Time constant 0, minutes
+    _t1 = p[t1]                         # Time constant 1, minutes
+    _c = p[off]                         # output offset or bias, degF
+    _dt = p[dead]                       # deadtime, minutes
     _tc = max(0.1*max(_t0,_t1),0.8*_dt) # closed loop time constant
     _kc = (_t0+_t1)/(_k*(_tc+_dt))      # controller gain %CO/error
-    _ti = _t0+_t1                       # integrator time constant
+    _ti = _t0+_t1                       # integral time constant
     _td = _t0*_t1/(_t0+_t1)             # derivative time constant
     print(f'\nThe closed loop time constant = {_tc:7.3f} minutes')
     print(f'The controller gain           = {_kc:7.3f} %CO/unit of error')
@@ -60,21 +62,21 @@ def calc_PID(p):
 def init_params():
     p0 = np.empty(len(p_enum))
 
-    aCOrange = aCO[-1]-aCO[0]           # % control
-    aPVrange = aPV[-1]-aPV[0]           # deg F
-    p0[gain] = aPVrange / aCOrange      # plant gain deg F/% control
-    p0[t0] = 0.73                       # time constant 0, min
-    p0[t1] = 2.83                       # time constant 1, min
-    p0[off] = aPV[-1]-(aCO[-1]*p0[gain])# ambient temperature, deg F
-    p0[dead] = 0.282                    # dead time, min
+    aCOrange = aCO[-1]-aCO[0]           # range, % control
+    aPVrange = aPV[-1]-aPV[0]           # range, degF
+    p0[gain] = aPVrange / aCOrange      # plant gain degF/% control
+    p0[t0] = 0.73                       # time constant 0, minutes
+    p0[t1] = 2.83                       # time constant 1, minutes
+    p0[off] = aPV[-1]-(aCO[-1]*p0[gain])# ambient temperature, degF
+    p0[dead] = 0.282                    # dead time, minutes
 
     # bounds
     b = np.array(
-        [[0.001,np.inf],                # gain deg/%
-        [0.001,np.inf],                 # t0 minutes
-        [0.001,np.inf],                 # t1 minutes
+        [[0.001,np.inf],                # gain degF/%
+        [0.001,np.inf],                 # t0, minutes
+        [0.001,np.inf],                 # t1, minutes
         [0.0,np.inf],                   # offset, should be the ambient temperature
-        [0.0,np.inf]])                  # dead time minutes
+        [0.0,np.inf]])                  # dead time, minutes
     return p0, b
 
 
@@ -89,11 +91,10 @@ def difeq(y, t, p):
     _c = p[off]                         # output offset or bias
     _dt = p[dead]
     _t = t - _dt
-    if _t < 0:                          # don't assume CO befor t=0 is 0
+    if _t < aTime[0]:                   # don't assume CO before t=0 is 0
         _u = aCO[0]
     else:
-        #_u = float(control_interp(max(_t,0)))   # compensate for dead time
-        _u = float(qinterp(max(_t,0)))   # compensate for dead time
+        _u = float(control_interp(max(_t,0)))   # compensate for dead time
     _dy2dt = (-(_t0+_t1)*y[1]-y[0]+_k*_u+_c)/(_t0*_t1)
     return np.array([y[1], _dy2dt])     # return PV' and PV''
 
@@ -166,7 +167,7 @@ def main():
         Don't forget to change the deliminator for the ReadCSV function
         The time units are those used in the input file"""
 
-    global aTime, aCO, aPV, control_interp, qinterp, b   # These don't change after being initialized
+    global aTime, aCO, aPV, control_interp, b   # These don't change after being initialized
     path = sys.argv[1:] and sys.argv[1] or os.path.join("..", "data", "Hotrod.txt")
     df = pd.read_csv(path, sep='\t', header=0)
     aTime = df.to_numpy()[:,0]
@@ -181,8 +182,20 @@ def main():
         aCO = aCO[:-ksmooth]
         break
     aTime /= 60.0                               # convert seconds to minutes
-    control_interp = CubicSpline(aTime, aCO, bc_type='natural')  # for dead time
-    qinterp = quadinterp(aTime, aCO)
+
+    if '--splineinterp' in sys.argv:
+      control_interp = CubicSpline(aTime, aCO, bc_type='natural')  # for dead time
+      COinterpolation = 'CubicSpline'
+    elif '--quadinterp' in sys.argv:
+      control_interp = quadinterp(aTime, aCO)
+      COinterpolation = 'Quadratic'
+    elif '--cubicinterp' in sys.argv:
+      control_interp = cubicinterp(aTime, aCO)
+      COinterpolation = 'Cubic'
+    else:
+      ### Default to linear interpolation
+      control_interp = linearinterp(aTime, aCO)
+      COinterpolation = 'Linear'
 
     p0, b = init_params()                       # initial parameters and bounds
     time0 = time.process_time()
@@ -195,6 +208,7 @@ def main():
     gnorm = np.linalg.norm(dp)                  # the gradient norm at the 'minimum'
     print(f'\nMSE = {mse:12.9f}  RMSE = {np.sqrt(mse):12.9f} gnorm = {gnorm:.3f}')
     print(f'Moving average size = {ksmooth}')
+    print(f'Control Output interpolation for deadtime = {COinterpolation}')
 
     print_params(p_opt)
     _k = p_opt[gain]                            # open loop gain.  PV change / %control output
@@ -203,6 +217,8 @@ def main():
     _c = p_opt[off]                             # PV offset, ambient PV
     _dt = p_opt[dead]                           # dead time
     calc_PID(p_opt)                             # use optimize parameters for calculating PID
+
+    sys.stdout.flush()
 
     # initial process value and rate of change
     pv0 = np.array([aPV[0], (aPV[1]-aPV[0])/(aTime[1]-aTime[0])])
