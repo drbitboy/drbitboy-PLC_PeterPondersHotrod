@@ -27,9 +27,15 @@ alpha = 200e-6                          # learning rate
 h = 1e-5                                # finite difference step size
 
 
+def print_tolerances():
+    print(f"\nMSE max tolerance = {ftol}")
+    print(f"Distance max tolerance = {xtol}")
+    print(f"Learning rate = {alpha}")
+    print(f"Finite difference stop = {h}")
+
 
 p_enum = (gain, t0, t1, off, dead) = range(0,5) # enumerated global constants, perhaps I should use e_gain instead of gain
-
+off_scale = 100.0
 
 
 def print_params(p):
@@ -46,7 +52,6 @@ def calc_PID(p):
     _k = p[gain]                        # open loop extend gain, degF/%
     _t0 = p[t0]                         # Time constant 0, minutes
     _t1 = p[t1]                         # Time constant 1, minutes
-    _c = p[off]                         # output offset or bias, degF
     _dt = p[dead]                       # deadtime, minutes
     _tc = max(0.1*max(_t0,_t1),0.8*_dt) # closed loop time constant
     _kc = (_t0+_t1)/(_k*(_tc+_dt))      # controller gain %CO/error
@@ -65,10 +70,12 @@ def init_params():
     aCOrange = aCO[-1]-aCO[0]           # range, % control
     aPVrange = aPV[-1]-aPV[0]           # range, degF
     p0[gain] = aPVrange / aCOrange      # plant gain degF/% control
-    p0[t0] = 0.73                       # time constant 0, minutes
-    p0[t1] = 2.83                       # time constant 1, minutes
+    p0[t0] = 0.685                      # time constant 0, minutes
+    p0[t1] = 2.848                      # time constant 1, minutes
     p0[off] = aPV[-1]-(aCO[-1]*p0[gain])# ambient temperature, degF
-    p0[dead] = 0.282                    # dead time, minutes
+    p0[off] = p0[off] / off_scale       # ambient temperature, hdegF
+    p0[off] = .777                      # ambient temperature, hdegF
+    p0[dead] = 0.353                    # dead time, minutes
 
     # bounds
     b = np.array(
@@ -88,14 +95,18 @@ def difeq(y, t, p):
     _k = p[gain]                        # open loop extend gain
     _t0 = p[t0]
     _t1 = p[t1]
-    _c = p[off]                         # output offset or bias
+    _c = p[off]                         # output offset or bias; scal
     _dt = p[dead]
     _t = t - _dt
     if _t < aTime[0]:                   # don't assume CO before t=0 is 0
         _u = aCO[0]
     else:
         _u = float(control_interp(max(_t,0)))   # compensate for dead time
-    _dy2dt = (-(_t0+_t1)*y[1]-y[0]+_k*_u+_c)/(_t0*_t1)
+
+    ### Implement model
+    ### - N.B. scale temperature offset paremeter (_c = p[off]) in model
+    _dy2dt = (-(_t0+_t1)*y[1]-y[0]+_k*_u+(_c*off_scale))/(_t0*_t1)
+
     return np.array([y[1], _dy2dt])     # return PV' and PV''
 
 
@@ -140,21 +151,28 @@ def del_f(f, p):
 def gradient_descent(f, p):
     """ minimize the cost function f using parameters p
     """
-    mse = f(p)
+    _mse = mse = f(p)
     print(f'MSE = {mse:12.9f}')                 # initial mean squared error
     fxtol = 1.01*xtol                           # filter distance tolerence
+    alphafactor,alphabail = 1.0,False
     while mse > ftol and fxtol > xtol:          # test for change in parameters
-        grad = del_f(f,p)                       # gradient
-        gnorm = np.linalg.norm(grad)            # gradient norm
-        step = -alpha*grad                      # the step is opposite
-        p += step                               # update the parameters
-        p = np.fmax(np.fmin(p,b[:,1]),b[:,0])   # bounds check
-        _mse = f(p)                             # cost function
-        if _mse < mse:
+        if _mse is mse:                         # Recalculate if mse was not updated
+          grad = del_f(f,p)                     # - gradient
+          gnorm = np.linalg.norm(grad)          # - gradient norm
+        step = -alpha*alphafactor*grad          # the step is opposite; scale by nominal factor of 1.0
+        pnew = p + step                         # update the parameters
+        pnew = np.fmax(np.fmin(pnew,b[:,1]),b[:,0])   # bounds check
+        _mse = f(pnew)                          # cost function
+        if _mse < mse or alphabail:             # If MSE decreased or alphafactor became 0
             fxtol += 0.2*(np.linalg.norm(step/p)-fxtol) # beware of divide by 0!
+            p[:] = pnew
             mse = _mse
-            # print(f'MSE = {_mse:12.9f} gnorm = {gnorm:6.3f} {p[0]:8.6f} {p[1]:8.6f} {p[2]:8.6f} {p[3]:8.6f} {p[4]:8.6f}')
+            alphafactor,alphabail = 1.0,False
             print(f'MSE = {_mse:12.9f} fxtol = {fxtol:.3E} {p[0]:8.6f} {p[1]:8.6f} {p[2]:8.6f} {p[3]:8.6f} {p[4]:8.6f}')
+        else:                                   # IF MSE did not decrease
+            alphafactor /= 2.0                  # - Halve scale factor
+            if alphafactor == 0.0:              # - Bail if scale factor reaches 0
+              alphafactor,alphabail = 1.0,True
     return p, mse
 
 
@@ -164,32 +182,34 @@ def main():
         system identification.
         The file must have a header with three columns.
         Time, Control, and Process Variable
-        Don't forget to change the deliminator for the ReadCSV function
+        Don't forget to change the delimiter for the pandas.read_csv function
         The time units are those used in the input file"""
 
     global aTime, aCO, aPV, control_interp, b   # These don't change after being initialized
-    path = sys.argv[1:] and sys.argv[1] or os.path.join("..", "data", "Hotrod.txt")
+    eqsplit = lambda s:s.split('=')
+    argdict = dict([(lst[0],lst[1:],) for lst in map(eqsplit,sys.argv[1:])])
+    path = argdict.get('--datapath',[os.path.join("..", "data", "Hotrod.txt")])[0]
     df = pd.read_csv(path, sep='\t', header=0)
     aTime = df.to_numpy()[:,0]
     aCO = df.to_numpy()[:,1]                    # control output, 0-100%
     aPV = df.to_numpy()[:,2]                    # process values, temperatures
-    ksmooth = 0
-    for arg in sys.argv:
-      if arg.startswith('--smooth='):
-        ksmooth = int(arg[9:])
+
+    ### Smooth data if --smooth=N is on command line
+    ksmooth = int(argdict.get('--smooth',[0])[0])
+    if ksmooth > 0:
         aPV = np.vstack([np.roll(aPV,-i) for i in range(ksmooth)]).mean(axis=0)[:-ksmooth]
         aTime = aTime[:-ksmooth]
         aCO = aCO[:-ksmooth]
-        break
     aTime /= 60.0                               # convert seconds to minutes
 
-    if '--splineinterp' in sys.argv:
+    ### Use specified interpolation Control output for dead time
+    if '--splineinterp' in argdict:
       control_interp = CubicSpline(aTime, aCO, bc_type='natural')  # for dead time
       COinterpolation = 'CubicSpline'
-    elif '--quadinterp' in sys.argv:
+    elif '--quadinterp' in argdict:
       control_interp = quadinterp(aTime, aCO)
       COinterpolation = 'Quadratic'
-    elif '--cubicinterp' in sys.argv:
+    elif '--cubicinterp' in argdict:
       control_interp = cubicinterp(aTime, aCO)
       COinterpolation = 'Cubic'
     else:
@@ -197,26 +217,36 @@ def main():
       control_interp = linearinterp(aTime, aCO)
       COinterpolation = 'Linear'
 
+    ### Check command line for tolerance
+    global xtol
+    xtol = float(argdict.get('--xtol',[xtol])[0])
+
     p0, b = init_params()                       # initial parameters and bounds
+
+    ### Here's the beef:  optimize the model fit to the data
     time0 = time.process_time()
-    p_opt, mse = gradient_descent(t0p2, p0)     # p_opt are the optimizined parameters
+    p_opt, mse = gradient_descent(t0p2, p0)     # p_opt are the optimized parameters
     diftime = time.process_time()-time0
+
     m, s = divmod(int(diftime),60)
     h, m = divmod(m,60)
     print(f"\nElasped Time = {h:02d}:{m:02d}:{s:02d}")
+
     dp = del_f(t0p2, p_opt)                     # the gradient at the 'minimum'
     gnorm = np.linalg.norm(dp)                  # the gradient norm at the 'minimum'
     print(f'\nMSE = {mse:12.9f}  RMSE = {np.sqrt(mse):12.9f} gnorm = {gnorm:.3f}')
     print(f'Moving average size = {ksmooth}')
     print(f'Control Output interpolation for deadtime = {COinterpolation}')
 
+    print_tolerances()
+
     print_params(p_opt)
+
     _k = p_opt[gain]                            # open loop gain.  PV change / %control output
     _t0 = p_opt[t0]                             # time constant 0
     _t1 = p_opt[t1]                             # time constant 1
-    _c = p_opt[off]                             # PV offset, ambient PV
     _dt = p_opt[dead]                           # dead time
-    calc_PID(p_opt)                             # use optimize parameters for calculating PID
+    calc_PID(p_opt)                             # use optimized model parameters for calculating PID
 
     sys.stdout.flush()
 
