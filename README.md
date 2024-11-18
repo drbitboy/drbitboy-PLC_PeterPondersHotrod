@@ -13,3 +13,4 @@
 * **--splineinterp** - Use cubic spline to interpolate Control Output data for dead time
   * N.B. this option models overshoot and undershoot
 * **--xtol=value** - Tolerance for parameter movement per iteration to terminate iterations (default:  1e-06)
+* **--fixedlist=par[,par[,par[,...]]]** - Which model parameter(s), of gain, t0, t1, dt, and off, to fix at their initial value
