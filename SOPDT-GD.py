@@ -34,16 +34,20 @@ def print_tolerances():
     print(f"Finite difference stop = {h}")
 
 
-p_enum = (gain, t0, t1, off, dead) = range(0,5) # enumerated global constants, perhaps I should use e_gain instead of gain
+execstr = "gain,t0,t1,off,dead = range(5)" # enumerated global constants, perhaps I should use e_gain instead of gain
+s_enum = [s.strip() for s in execstr.split('=')[0].split(',')]
+exec(execstr)
 off_scale = 100.0
 
 
 def print_params(p):
-    print(f"\ngain = {p[gain]:9.6f}")
-    print(f"t0   = {p[t0]:9.6f}")
-    print(f"t1   = {p[t1]:9.6f}")
-    print(f"off  = {p[off]:9.6f}")
-    print(f"dead = {p[dead]:9.6f}\n")
+    nl = '\n'
+    for i,name in enumerate(s_enum):
+        leadingnl = (not i) and '\n' or ''
+        trailingnl = (i==4) and '\n' or ''
+        fixed = (i in fixedlist) and '(fixed)' or ''
+        print(f"{leadingnl}{name:4s} = {p[i]:9.6f}{fixed}{trailingnl}")
+    return
 
 
 
@@ -65,7 +69,7 @@ def calc_PID(p):
 
 
 def init_params():
-    p0 = np.empty(len(p_enum))
+    p0 = np.empty(len(s_enum),dtype=np.float64)
 
     aCOrange = aCO[-1]-aCO[0]           # range, % control
     aPVrange = aPV[-1]-aPV[0]           # range, degF
@@ -74,7 +78,6 @@ def init_params():
     p0[t1] = 2.848                      # time constant 1, minutes
     p0[off] = aPV[-1]-(aCO[-1]*p0[gain])# ambient temperature, degF
     p0[off] = p0[off] / off_scale       # ambient temperature, hdegF
-    p0[off] = .777                      # ambient temperature, hdegF
     p0[dead] = 0.353                    # dead time, minutes
 
     # bounds
@@ -158,6 +161,7 @@ def gradient_descent(f, p):
     while mse > ftol and fxtol > xtol:          # test for change in parameters
         if _mse is mse:                         # Recalculate if mse was not updated
           grad = del_f(f,p)                     # - gradient
+          grad[fixedlist] = 0.0
           gnorm = np.linalg.norm(grad)          # - gradient norm
         step = -alpha*alphafactor*grad          # the step is opposite; scale by nominal factor of 1.0
         pnew = p + step                         # update the parameters
@@ -221,8 +225,12 @@ def main():
     global xtol
     xtol = float(argdict.get('--xtol',[xtol])[0])
 
+    global b, fixedlist
     p0, b = init_params()                       # initial parameters and bounds
-
+    fixedlist = [s_enum.index(scomma.strip())
+                 for scomma in argdict.get("--fixedlist", '')[0].split(',')
+                 if scomma.strip()
+                ]
     ### Here's the beef:  optimize the model fit to the data
     time0 = time.process_time()
     p_opt, mse = gradient_descent(t0p2, p0)     # p_opt are the optimized parameters
@@ -230,7 +238,7 @@ def main():
 
     m, s = divmod(int(diftime),60)
     h, m = divmod(m,60)
-    print(f"\nElasped Time = {h:02d}:{m:02d}:{s:02d}")
+    print(f"\nElapsed Time = {h:02d}:{m:02d}:{s:02d}")
 
     dp = del_f(t0p2, p_opt)                     # the gradient at the 'minimum'
     gnorm = np.linalg.norm(dp)                  # the gradient norm at the 'minimum'
@@ -246,6 +254,7 @@ def main():
     _t0 = p_opt[t0]                             # time constant 0
     _t1 = p_opt[t1]                             # time constant 1
     _dt = p_opt[dead]                           # dead time
+    _off = p_opt[off]                           # dead time
     calc_PID(p_opt)                             # use optimized model parameters for calculating PID
 
     sys.stdout.flush()
@@ -261,12 +270,12 @@ def main():
     lCO = aCO.tolist()
     lPV = aPV.tolist()
     lEV = aEV.tolist()
-    dict_of_lists = {'lTime':lTime, 'lCO':lCO, 'lPV':lPV, 'lEV':lEV}
+    dict_of_lists = dict(lTime=lTime, lCO=lCO, lPV=lPV, lEV=lEV)
     with open("SOPDT_GD.json", 'w') as f: json.dump(dict_of_lists, f)
 
     # temperature plot
     plot_name = os.path.basename(__file__).split('.',1)[0]
-    tempplot(aTime, aPV, aEV[:,0], aCO, plot_name = plot_name, plot_type=".png", model=(_k,_t0,_t1,_dt), block=True)
+    tempplot(aTime, aPV, aEV[:,0], aCO, plot_name = plot_name, plot_type=".png", model=(_k,_t0,_t1,_dt,_off), block=True)
 
 
 
