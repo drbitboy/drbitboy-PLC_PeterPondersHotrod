@@ -68,17 +68,19 @@ def calc_PID(p):
 
 
 
-def init_params():
+def init_params(argdikt=dict()):
     p0 = np.empty(len(s_enum),dtype=np.float64)
 
-    aCOrange = aCO[-1]-aCO[0]           # range, % control
-    aPVrange = aPV[-1]-aPV[0]           # range, degF
-    p0[gain] = aPVrange / aCOrange      # plant gain degF/% control
-    p0[t0] = 0.685                      # time constant 0, minutes
-    p0[t1] = 2.848                      # time constant 1, minutes
-    p0[off] = aPV[-1]-(aCO[-1]*p0[gain])# ambient temperature, degF
-    p0[off] = p0[off] / off_scale       # ambient temperature, hdegF
-    p0[dead] = 0.353                    # dead time, minutes
+    V = lambda name,dflt: float(argdikt.get('--'+name,[dflt])[0])
+
+    aCOrange = aCO[-1]-aCO[0]                # range, % control
+    aPVrange = aPV[-1]-aPV[0]                # range, degF
+    p0[gain] = V('gain',aPVrange/aCOrange)   # plant gain degF/% control
+    p0[t0] = V('t0',0.685)                   # time constant 0, minutes
+    p0[t1] = V('t1',2.848)                   # time constant 1, minutes
+    _off = aPV[-1]-(aCO[-1]*p0[gain])        # ambient temp, degF
+    p0[off] = V('off',_off / off_scale)      # ambient temperature, degF
+    p0[dead] = V('dead',0.353)               # dead time, minutes
 
     # bounds
     b = np.array(
@@ -137,7 +139,7 @@ def del_f(f, p):
         p is an array of the 15 parameters to optimize
         args = (aTime, aActPos) These don't change
     """
-    dp = np.zeros_like(p)
+    dp = np.zeros_like(p, dtype=np.float64)
     for i in range(len(p)):
         _save = p[i]                    # save p[i] so it can be restored later
         hmax = np.maximum(_save,1.)*h
@@ -226,9 +228,9 @@ def main():
     xtol = float(argdict.get('--xtol',[xtol])[0])
 
     global b, fixedlist
-    p0, b = init_params()                       # initial parameters and bounds
+    p0, b = init_params(argdict)         # initial parameters and bounds
     fixedlist = [s_enum.index(scomma.strip())
-                 for scomma in argdict.get("--fixedlist", '')[0].split(',')
+                 for scomma in argdict.get("--fixedlist", [''])[0].split(',')
                  if scomma.strip()
                 ]
     ### Here's the beef:  optimize the model fit to the data
