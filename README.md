@@ -6,6 +6,7 @@
 
 ### Command-line options
 
+* **--gradient-descent** - Use gradient descent minimization (default:  Nelder-Mead Simplex)
 * **--datepath=Hotrod.txt** - Path to raw data file to use (default:  ../data/Hotrod.txt)
 * **--smooth=N** - Size of moving average of temperature sensor (PV) data
 * **--quadinterp** - Use quadratics (parabolas), with slope=0 at segment endpoints, to interpolate Control Output data for dead time (default:  linear interpolation)

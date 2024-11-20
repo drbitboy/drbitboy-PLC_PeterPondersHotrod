@@ -12,6 +12,7 @@ import copy
 import numpy as np
 import pandas as pd
 from scipy.integrate import odeint
+from scipy.optimize import minimize
 from scipy.interpolate import CubicSpline
 from linearinterp import linearinterp
 from quadinterp import quadinterp
@@ -42,11 +43,11 @@ off_scale = 100.0
 
 def print_params(p):
     nl = '\n'
+    print(f"\nModel parameters:")
     for i,name in enumerate(s_enum):
-        leadingnl = (not i) and '\n' or ''
         trailingnl = (i==4) and '\n' or ''
         fixed = (i in fixedlist) and '(fixed)' or ''
-        print(f"{leadingnl}{name:4s} = {p[i]:9.6f}{fixed}{trailingnl}")
+        print(f"  {name:4s} = {p[i]:9.6f}{fixed}{trailingnl}")
     return
 
 
@@ -233,22 +234,48 @@ def main():
                  for scomma in argdict.get("--fixedlist", [''])[0].split(',')
                  if scomma.strip()
                 ]
+
     ### Here's the beef:  optimize the model fit to the data
-    time0 = time.process_time()
-    p_opt, mse = gradient_descent(t0p2, p0)     # p_opt are the optimized parameters
-    diftime = time.process_time()-time0
+    if '--gradient-descent' in argdict:
+        method,useGD = 'Gradient descent',True
+        time0 = time.process_time()
+        p_opt, mse = gradient_descent(t0p2, p0)     # p_opt are the optimized parameters
+        diftime = time.process_time()-time0
+    else:
+        method,useGD = 'Nelder-Mead',False
+        mse0 = t0p2(p0)
+        time0 = time.process_time()
+        res = minimize(t0p2, p0, method='Nelder-Mead', bounds=b
+                      , options={'disp':False, 'maxiter':1000
+                      , 'adaptive':True}
+                      )
+        diftime = time.process_time()-time0
+        #import pprint
+        #pprint.pprint(res)
+        p_opt, mse = res.x, res.fun
+
+    useNM = not useGD     # Nelder-Mead Simplex Minimization
 
     m, s = divmod(int(diftime),60)
     h, m = divmod(m,60)
     print(f"\nElapsed Time = {h:02d}:{m:02d}:{s:02d}")
+    print(f'Method = {method}')
+    if useNM:
+        print(f'  Status/Success = {res.status}/{res.success}')
+        print(f'  Message        = {res.message}')
+        print(f'  Iterations     = {res.nit}')
+        print(f'  Function evals = {res.nfev}')
 
     dp = del_f(t0p2, p_opt)                     # the gradient at the 'minimum'
     gnorm = np.linalg.norm(dp)                  # the gradient norm at the 'minimum'
-    print(f'\nMSE = {mse:12.9f}  RMSE = {np.sqrt(mse):12.9f} gnorm = {gnorm:.3f}')
-    print(f'Moving average size = {ksmooth}')
-    print(f'Control Output interpolation for deadtime = {COinterpolation}')
+    print('\nData Filters:')
+    print(f'  Moving average size = {ksmooth}')
+    print(f'  Control Output interpolation for deadtime = {COinterpolation}')
 
-    print_tolerances()
+    print(f'\nResult:\n  MSE = {mse:12.9f}; RMSE = {np.sqrt(mse):12.9f}; gnorm = {gnorm:.3f}')
+
+    if useGD  : print_tolerances()
+    elif useNM: pass
 
     print_params(p_opt)
 
@@ -273,7 +300,7 @@ def main():
     lPV = aPV.tolist()
     lEV = aEV.tolist()
     dict_of_lists = dict(lTime=lTime, lCO=lCO, lPV=lPV, lEV=lEV)
-    with open("SOPDT_GD.json", 'w') as f: json.dump(dict_of_lists, f)
+    with open("SOPDT.json", 'w') as f: json.dump(dict_of_lists, f)
 
     # temperature plot
     plot_name = os.path.basename(__file__).split('.',1)[0]
