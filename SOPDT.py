@@ -20,11 +20,19 @@ from cubicinterp import cubicinterp
 from tempplot import tempplot           # plotting script of results
 
 
+execstr = "gain,t0,t1,off,dead = range(5)" # enumerated global constants, perhaps I should use e_gain instead of gain
+s_enum = [s.strip() for s in execstr.split('=')[0].split(',')]
+Npars = len(s_enum)
+exec(execstr)
+off_scale = 100.0
+
+
 
 ftol = 0.2                              # search until mse < ftol, it takes a day
 ftol = 0.05                             # search until mse < ftol, it takes a day
 xtol = 1e-6                             # distance tolerance, search until xftol < xtol
-alpha = 200e-6                          # learning rate
+alpha = np.array([200e-6]*Npars)        # learning rates
+alphad = np.zeros(Npars,dtype=np.int32) # Detect consistent direction of learning => increase alpha
 h = 1e-5                                # finite difference step size
 
 
@@ -33,12 +41,6 @@ def print_tolerances():
     print(f"Distance max tolerance = {xtol}")
     print(f"Learning rate = {alpha}")
     print(f"Finite difference stop = {h}")
-
-
-execstr = "gain,t0,t1,off,dead = range(5)" # enumerated global constants, perhaps I should use e_gain instead of gain
-s_enum = [s.strip() for s in execstr.split('=')[0].split(',')]
-exec(execstr)
-off_scale = 100.0
 
 
 def print_params(p):
@@ -141,6 +143,7 @@ def del_f(f, p):
         args = (aTime, aActPos) These don't change
     """
     dp = np.zeros_like(p, dtype=np.float64)
+    fbase = f(p)
     for i in range(len(p)):
         _save = p[i]                    # save p[i] so it can be restored later
         hmax = np.maximum(_save,1.)*h
@@ -149,6 +152,13 @@ def del_f(f, p):
         p[i] = _save - hmax             # take a step in the negative direction.
         fneg = f(p)                     # evaluate after taking a negative step
         p[i] = _save                    # restore cell to its original value
+        if fneg>=fbase and fpos>=fbase: # do nothing if near minimum
+          alphad[i] = 0
+          continue
+        if   fpos>fneg: alphad[i] += 1  # Detect increasing slope
+        elif fpos<fneg: alphad[i] -= 1  # Detect decreasing slope
+        else          : alphad[i] = 0   # Detect no slope
+          
         dp[i] = (fpos-fneg)/(2.*hmax)   # calculate the gradient with p[i] as the center value
     return dp                           # return the gradient
 
@@ -164,6 +174,12 @@ def gradient_descent(f, p):
     while mse > ftol and fxtol > xtol:          # test for change in parameters
         if _mse is mse:                         # Recalculate if mse was not updated
           grad = del_f(f,p)                     # - gradient
+          iwgrad0 = np.where(grad == 0.0)       #   - where gradient is near minimum
+          iwad = np.where(alphad > 2)           #   - where multiple steps in same direction
+          alpha[iwgrad0] /= 2.0                 #   - Decrease step if near minimum
+          alpha[iwad] *= 1.414                  #   - Increase step if not near minimum
+          alphad[iwgrad0] = 0                   #   - Restart steps-in-same-dir
+          alphad[iwad] = 0                      #   - Restart steps-in-same-dir
           grad[fixedlist] = 0.0
           gnorm = np.linalg.norm(grad)          # - gradient norm
         step = -alpha*alphafactor*grad          # the step is opposite; scale by nominal factor of 1.0
