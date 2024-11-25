@@ -18,15 +18,15 @@ with open(searchlog,'r') as f:
              ]
             )
 
-for name in names:
+for ordinal,name in enumerate(names):
   index = indices[name]
   plt.plot(a[:,index])
   plt.title(name)
   if 'fxtol' == name: plt.semilogy()
   plt.show()
-  for othername in names:
+  for otherordinal,othername in enumerate(names):
     otherindex = indices[othername]
-    if otherindex <= index: continue
+    if otherordinal <= ordinal: continue
     plt.plot(a[:,index],a[:,otherindex])
     plt.title(f'{name} vs. {othername}')
     if 'fxtol' == othername: plt.semilogy()
