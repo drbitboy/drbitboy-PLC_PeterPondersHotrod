@@ -56,7 +56,7 @@ def tempplot(aTimes, aPV, aEV, aCO, **kwargs):
             dt = model[3]
             text += "\n"+fr"$dt = {dt:.2f}\; min$"
             off = model[4]
-            text += "\n"+fr"$off = {off:.4f}\; h^{{\circ}}F$"
+            text += "\n"+fr"$off = {off:.4f}\; ^{{\circ}}F$"
         _ax0.text(0.84, 0.04, text, transform=_ax0.transAxes,
             bbox={'facecolor':'white', 'pad':4, 'alpha':0.7}, family='monospace')
                 

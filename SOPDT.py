@@ -264,8 +264,9 @@ def main():
                  if scomma.strip()
                 ]
 
-    global min_alpha
-    min_alpha = V('min-alpha',3e-5)
+    global alpha, min_alpha
+    min_alpha = V('min-alpha',2e-4)
+    alpha[:] = min_alpha
 
     ### Here's the beef:  optimize the model fit to the data
     if '--gradient-descent' in argdict:
@@ -333,11 +334,15 @@ def main():
     lPV = aPV.tolist()
     lEV = aEV.tolist()
     dict_of_lists = dict(lTime=lTime, lCO=lCO, lPV=lPV, lEV=lEV)
-    with open("SOPDT.json", 'w') as f: json.dump(dict_of_lists, f)
+    plot_name = os.path.basename(__file__).split('.',1)[0]
+    plot_name = f"out_{plot_name}"
+    with open(f"{plot_name}.json", "w") as f: json.dump(dict_of_lists, f)
 
     # temperature plot
-    plot_name = os.path.basename(__file__).split('.',1)[0]
-    tempplot(aTime, aPV, aEV[:,0], aCO, plot_name = plot_name, plot_type=".png", model=(_k,_t0,_t1,_dt,_off), block=True)
+    tempplot(aTime, aPV, aEV[:,0], aCO
+            , plot_name = plot_name, plot_type=".png"
+            , model=(_k*gain_scale,_t0*t0_scale,_t1*t1_scale,_dt*dead_scale,_off*off_scale)
+            , block=True)
 
 
 

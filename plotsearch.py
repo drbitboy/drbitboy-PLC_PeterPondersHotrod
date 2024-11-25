@@ -6,6 +6,7 @@ searchlog = (['searchE.log']
                 if s.startswith('search') and s.endswith('.log')]
             ).pop()
 indices = dict(zip('fxtol gain t0 t1 off dt'.split(),range(6)))
+indices.update(dict(dead=indices['dt']))
 names = [s for s in sys.argv[1:] if s in indices]
 
 with open(searchlog,'r') as f:
@@ -22,8 +23,8 @@ for name in names:
   if 'fxtol' == name: plt.semilogy()
   plt.show()
   for othername in names:
-    if othername == name: continue
     otherindex = indices[othername]
+    if otherindex <= index: continue
     plt.plot(a[:,index],a[:,otherindex])
     plt.title(f'{name} vs. {othername}')
     if 'fxtol' == othername: plt.semilogy()
