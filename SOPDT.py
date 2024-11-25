@@ -247,8 +247,9 @@ def main():
       COinterpolation = 'Linear'
 
     ### Check command line for tolerance
-    global xtol
+    global xtol,ftol
     xtol = V('xtol',xtol)
+    ftol = V('ftol',ftol)
 
     global b, fixedlist
     p0, b = init_params()     # initial parameters and bounds
