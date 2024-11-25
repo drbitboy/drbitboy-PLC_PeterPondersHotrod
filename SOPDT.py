@@ -24,7 +24,6 @@ execstr = "gain,t0,t1,off,dead = range(5)" # enumerated global constants, perhap
 s_enum = [s.strip() for s in execstr.split('=')[0].split(',')]
 Npars = len(s_enum)
 exec(execstr)
-off_scale = 100.0
 
 V = lambda name,dflt: float(argdict.get('--'+name,[dflt])[0])
 
@@ -101,11 +100,11 @@ def difeq(y, t, p):
     """ generate estimated SOPDT solution
         y[0] = process value
         y[1] = rate of change of the process value"""
-    _k = p[gain]                        # open loop extend gain
-    _t0 = p[t0]
-    _t1 = p[t1]
-    _c = p[off]                         # output offset or bias; scal
-    _dt = p[dead]
+    _k = p[gain] * gain_scale           # open loop extend gain
+    _t0 = p[t0] * t0_scale
+    _t1 = p[t1] * t1_scale
+    _c = p[off] * off_scale             # output offset or bias; scal
+    _dt = p[dead] * dead_scale
     _t = t - _dt
     if _t < aTime[0]:                   # don't assume CO before t=0 is 0
         _u = aCO[0]
@@ -113,8 +112,7 @@ def difeq(y, t, p):
         _u = float(control_interp(max(_t,0)))   # compensate for dead time
 
     ### Implement model
-    ### - N.B. scale temperature offset paremeter (_c = p[off]) in model
-    _dy2dt = (-(_t0+_t1)*y[1]-y[0]+_k*_u+(_c*off_scale))/(_t0*_t1)
+    _dy2dt = (-(_t0+_t1)*y[1]-y[0]+_k*_u+_c)/(_t0*_t1)
 
     return np.array([y[1], _dy2dt])     # return PV' and PV''
 
@@ -245,6 +243,14 @@ def main():
       ### Default to linear interpolation
       control_interp = linearinterp(aTime, aCO)
       COinterpolation = 'Linear'
+
+    ### Scaling for model parameters
+    global gain_scale, t0_scale, t1_scale, off_scale, dead_scale
+    gain_scale = V('gain-scale', 1.0)
+    t0_scale  = V('t0-scale', 1.0)
+    t1_scale  = V('t1-scale', 1.0)
+    off_scale = V('off-scale', 100.0)
+    dead_scale = V('dead-scale', 1.0)
 
     ### Check command line for tolerance
     global xtol,ftol
