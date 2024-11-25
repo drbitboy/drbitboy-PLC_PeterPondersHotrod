@@ -26,6 +26,7 @@ Npars = len(s_enum)
 exec(execstr)
 off_scale = 100.0
 
+V = lambda name,dflt: float(argdict.get('--'+name,[dflt])[0])
 
 
 ftol = 0.2                              # search until mse < ftol, it takes a day
@@ -71,12 +72,12 @@ def calc_PID(p):
 
 
 
-def init_params(argdikt=dict()):
+def init_params():
+    global argdict
     p0 = np.empty(len(s_enum),dtype=np.float64)
 
-    V = lambda name,dflt: float(argdikt.get('--'+name,[dflt])[0])
-
     aCOrange = aCO[-1]-aCO[0]                # range, % control
+    if aCOrange <= 0.0: aCOrange = 1.0
     aPVrange = aPV[-1]-aPV[0]                # range, degF
     p0[gain] = V('gain',aPVrange/aCOrange)   # plant gain degF/% control
     p0[t0] = V('t0',0.685)                   # time constant 0, minutes
@@ -87,9 +88,9 @@ def init_params(argdikt=dict()):
 
     # bounds
     b = np.array(
-        [[0.001,np.inf],                # gain degF/%
-        [0.001,np.inf],                 # t0, minutes
-        [0.001,np.inf],                 # t1, minutes
+        [[1e-6,np.inf],                 # gain degF/%
+        [1e-6,np.inf],                  # t0, minutes
+        [1e-6,np.inf],                  # t1, minutes
         [0.0,np.inf],                   # offset, should be the ambient temperature
         [0.0,np.inf]])                  # dead time, minutes
     return p0, b
@@ -153,12 +154,10 @@ def del_f(f, p):
         fneg = f(p)                     # evaluate after taking a negative step
         p[i] = _save                    # restore cell to its original value
         if fneg>=fbase and fpos>=fbase: # do nothing if near minimum
-          alphad[i] = 0
-          continue
-        if   fpos>fneg: alphad[i] += 1  # Detect increasing slope
+          pass
+        elif fpos>fneg: alphad[i] += 1  # Detect increasing slope
         elif fpos<fneg: alphad[i] -= 1  # Detect decreasing slope
-        else          : alphad[i] = 0   # Detect no slope
-          
+
         dp[i] = (fpos-fneg)/(2.*hmax)   # calculate the gradient with p[i] as the center value
     return dp                           # return the gradient
 
@@ -167,6 +166,7 @@ def del_f(f, p):
 def gradient_descent(f, p):
     """ minimize the cost function f using parameters p
     """
+    global alpha
     _mse = mse = f(p)
     print(f'MSE = {mse:12.9f}')                 # initial mean squared error
     fxtol = 1.01*xtol                           # filter distance tolerence
@@ -174,11 +174,10 @@ def gradient_descent(f, p):
     while mse > ftol and fxtol > xtol:          # test for change in parameters
         if _mse is mse:                         # Recalculate if mse was not updated
           grad = del_f(f,p)                     # - gradient
-          iwgrad0 = np.where(grad == 0.0)       #   - where gradient is near minimum
-          iwad = np.where(alphad > 2)           #   - where multiple steps in same direction
-          alpha[iwgrad0] /= 2.0                 #   - Decrease step if near minimum
-          alpha[iwad] *= 1.414                  #   - Increase step if not near minimum
-          alphad[iwgrad0] = 0                   #   - Restart steps-in-same-dir
+          iwgrad0 = np.where(alpha > min_alpha) #     alpha is not too small
+          iwad = np.where(np.abs(alphad) > 1)   #   - where multiple steps in same direction
+          alpha[iwgrad0] /= 1.1                 #   - Decrease step
+          alpha[iwad] *= 1.2                    #   - Increase step if not near minimum
           alphad[iwad] = 0                      #   - Restart steps-in-same-dir
           grad[fixedlist] = 0.0
           gnorm = np.linalg.norm(grad)          # - gradient norm
@@ -191,10 +190,13 @@ def gradient_descent(f, p):
             p[:] = pnew
             mse = _mse
             alphafactor,alphabail = 1.0,False
-            print(f'MSE = {_mse:12.9f} fxtol = {fxtol:.3E} {p[0]:8.6f} {p[1]:8.6f} {p[2]:8.6f} {p[3]:8.6f} {p[4]:8.6f}')
+            print(f'MSE = {_mse:12.9f} fxtol = {fxtol:.3E}'
+                  f' {p[0]:10.8f} {p[1]:10.8f} {p[2]:10.8f} {p[3]:10.8f} {p[4]:10.8f}'
+                  f' {alpha[0]:9.4e} {alpha[1]:9.4e} {alpha[2]:9.4e} {alpha[3]:9.4e} {alpha[4]:9.4e}'
+                 )
         else:                                   # IF MSE did not decrease
             alphafactor /= 2.0                  # - Halve scale factor
-            if alphafactor == 0.0:              # - Bail if scale factor reaches 0
+            if alphafactor < 1e-7:              # - Bail if scale factor reaches 0
               alphafactor,alphabail = 1.0,True
     return p, mse
 
@@ -210,11 +212,15 @@ def main():
 
     global aTime, aCO, aPV, control_interp, b   # These don't change after being initialized
     eqsplit = lambda s:s.split('=')
+    global argdict
     argdict = dict([(lst[0],lst[1:],) for lst in map(eqsplit,sys.argv[1:])])
     path = argdict.get('--datapath',[os.path.join("..", "data", "Hotrod.txt")])[0]
-    df = pd.read_csv(path, sep='\t', header=0)
+    sep = argdict.get('--sep',['\s+'])[0]
+    global scaleCO
+    scaleCO = V('scale-co',1.0)
+    df = pd.read_csv(path, sep=sep, header=0)
     aTime = df.to_numpy()[:,0]
-    aCO = df.to_numpy()[:,1]                    # control output, 0-100%
+    aCO = df.to_numpy()[:,1] * scaleCO          # control output, 0-100%
     aPV = df.to_numpy()[:,2]                    # process values, temperatures
 
     ### Smooth data if --smooth=N is on command line
@@ -242,14 +248,17 @@ def main():
 
     ### Check command line for tolerance
     global xtol
-    xtol = float(argdict.get('--xtol',[xtol])[0])
+    xtol = V('xtol',xtol)
 
     global b, fixedlist
-    p0, b = init_params(argdict)         # initial parameters and bounds
+    p0, b = init_params()     # initial parameters and bounds
     fixedlist = [s_enum.index(scomma.strip())
                  for scomma in argdict.get("--fixedlist", [''])[0].split(',')
                  if scomma.strip()
                 ]
+
+    global min_alpha
+    min_alpha = V('min-alpha',3e-5)
 
     ### Here's the beef:  optimize the model fit to the data
     if '--gradient-descent' in argdict:
@@ -287,6 +296,7 @@ def main():
     print('\nData Filters:')
     print(f'  Moving average size = {ksmooth}')
     print(f'  Control Output interpolation for deadtime = {COinterpolation}')
+    print(f'  Scale CO factor = {scaleCO}')
 
     print(f'\nResult:\n  MSE = {mse:12.9f}; RMSE = {np.sqrt(mse):12.9f}; gnorm = {gnorm:.3f}')
 
